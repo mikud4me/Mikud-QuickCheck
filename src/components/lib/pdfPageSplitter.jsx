@@ -1,5 +1,5 @@
 import { PDFDocument } from 'pdf-lib';
-import { base44 } from '@/api/base44Client';
+import { uploadFileToStorage } from '@/api/supabaseClient';
 
 // ────────────────────────────────────────────────────────────────────────────
 // CLIENT-SIDE PAGE-LEVEL CHUNKING — הפיצול מתבצע בדפדפן המשתמש (לא בשרת).
@@ -18,7 +18,7 @@ import { base44 } from '@/api/base44Client';
 // בלי פיצול (999) — קובץ 7MB נחנק ב-120s timeout ומפיל את כל החיתום.
 const MAX_PAGES_PER_CHUNK = 4;
 
-// מוריד PDF מ-URL ומחזיר ArrayBuffer (CORS-safe — קבצים בסטוראג' של base44)
+// מוריד PDF מ-URL ומחזיר ArrayBuffer (קבצים בסטוראג' של Supabase)
 async function fetchPdfBytes(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`fetch failed ${res.status}`);
@@ -49,10 +49,10 @@ async function splitAndUploadPdf(bytes, baseName, documentType) {
   }
 
   // ── העלאה מקבילית (Promise.all) — מגלח עשרות שניות מול לולאה סדרתית ──
-  const uploads = await Promise.all(
-    chunkFiles.map((file) => base44.integrations.Core.UploadFile({ file }))
+  const uploadedUrls = await Promise.all(
+    chunkFiles.map((file) => uploadFileToStorage(file))
   );
-  return uploads.map((uploadRes) => ({ file_url: uploadRes.file_url, document_type: documentType }));
+  return uploadedUrls.map((file_url) => ({ file_url, document_type: documentType }));
 }
 
 // API ראשי: מקבל את רשימת הקבצים שהועלו ({ file_url, document_type, file_name }),
