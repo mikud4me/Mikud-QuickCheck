@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from './utils';
-import { 
+import {
   Home, Calculator, FileText, Users, TrendingUp, Shield,
   Menu, X, ChevronLeft, Phone, Mail, Building2, Globe, Target
 } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
 import MortgageChatbot from './components/mortgage/MortgageChatbot';
 import { Toaster } from 'sonner';
-import { isAdminOnlyPage } from './lib/adminOnlyPages';
 
 // STRIPPED: nav trimmed to the two surviving flows (see repo strip commit).
+// Neither is admin-only, so there's no auth/role check needed to decide
+// what's visible here -- unlike the original app, everyone sees both.
 const navItems = [
   { name: 'QuickDocCheck', label: '⚡ בדיקה מהירה', icon: FileText, highlight: true },
   { name: 'RefinanceQuickCheck', label: 'בדיקת מחזור מהירה', icon: TrendingUp },
@@ -18,24 +18,7 @@ const navItems = [
 
 export default function Layout({ children, currentPageName }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [user, setUser] = useState(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  useEffect(() => {
-    const loadUser = async () => {
-      try {
-        const userData = await base44.auth.me();
-        setUser(userData);
-        setIsAdmin(userData?.role === 'admin');
-      } catch {
-        setUser(null);
-        setIsAdmin(false);
-      }
-    };
-    loadUser();
-  }, []);
-
-  const filteredNavItems = navItems.filter(item => !isAdminOnlyPage(item.name) || isAdmin);
+  const filteredNavItems = navItems;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/30" dir="rtl">
@@ -114,8 +97,8 @@ export default function Layout({ children, currentPageName }) {
                 <Phone className="w-3.5 h-3.5 group-hover:animate-pulse" />
                 <span className="text-xs font-bold">*2324</span>
               </a>
-              <Link 
-                to={createPageUrl('ClientWorkflow')}
+              <Link
+                to={createPageUrl('QuickDocCheck')}
                 className="relative px-4 py-2 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-lg font-bold text-xs shadow-xl shadow-slate-900/40 hover:shadow-slate-900/60 transition-all duration-300 hover:-translate-y-0.5 overflow-hidden group"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-amber-500/0 via-amber-500/20 to-amber-500/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />

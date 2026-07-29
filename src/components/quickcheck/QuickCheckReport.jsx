@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Download, ArrowLeft, Zap, FolderArchive, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { base44 } from '@/api/base44Client';
 import OpportunityHook from './OpportunityHook';
 import DynamicGapAnalysis from './DynamicGapAnalysis';
 import AnomalyShield from './AnomalyShield';

@@ -1,14 +1,9 @@
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
-import NavigationTracker from '@/lib/NavigationTracker'
 import { pagesConfig } from './pages.config'
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
-import { AuthProvider, useAuth } from '@/lib/AuthContext';
-import UserNotRegisteredError from '@/components/UserNotRegisteredError';
-import ProtectedRoute from '@/components/ProtectedRoute';
-import { isAdminOnlyPage } from '@/lib/adminOnlyPages';
 import StagingBanner from './components/StagingBanner';
 
 const { Pages, Layout, mainPage } = pagesConfig;
@@ -19,69 +14,42 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout ?
   <Layout currentPageName={currentPageName}>{children}</Layout>
   : <>{children}</>;
 
-const AuthenticatedApp = () => {
-  const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
-
-  // Show loading spinner while checking app public settings or auth
-  if (isLoadingPublicSettings || isLoadingAuth) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  // Handle authentication errors
-  if (authError) {
-    if (authError.type === 'user_not_registered') {
-      return <UserNotRegisteredError />;
-    } else if (authError.type === 'auth_required') {
-      // Redirect to login automatically
-      navigateToLogin();
-      return null;
-    }
-  }
-
-  // Render the main app
-  return (
-    <Routes>
-      <Route path="/" element={
-        <LayoutWrapper currentPageName={mainPageKey}>
-          <MainPage />
-        </LayoutWrapper>
-      } />
-      {Object.entries(Pages).map(([path, Page]) => (
-        <Route
-          key={path}
-          path={`/${path}`}
-          element={
-            <LayoutWrapper currentPageName={path}>
-              {isAdminOnlyPage(path)
-                ? <ProtectedRoute requireAdmin><Page /></ProtectedRoute>
-                : <Page />}
-            </LayoutWrapper>
-          }
-        />
-      ))}
-      <Route path="*" element={<PageNotFound />} />
-    </Routes>
-  );
-};
-
+// No auth/admin gating here -- neither page in this app requires a login,
+// and none are on the admin-only list, so the Base44-era loading/redirect/
+// ProtectedRoute machinery was dead weight (always resolved to "just render
+// the page" for both routes, while still firing a doomed auth check against
+// a Base44 backend this app no longer has).
+const AppRoutes = () => (
+  <Routes>
+    <Route path="/" element={
+      <LayoutWrapper currentPageName={mainPageKey}>
+        <MainPage />
+      </LayoutWrapper>
+    } />
+    {Object.entries(Pages).map(([path, Page]) => (
+      <Route
+        key={path}
+        path={`/${path}`}
+        element={
+          <LayoutWrapper currentPageName={path}>
+            <Page />
+          </LayoutWrapper>
+        }
+      />
+    ))}
+    <Route path="*" element={<PageNotFound />} />
+  </Routes>
+);
 
 function App() {
-
   return (
-    <AuthProvider>
-      <QueryClientProvider client={queryClientInstance}>
-        <Router>
-          <StagingBanner />
-          <NavigationTracker />
-          <AuthenticatedApp />
-        </Router>
-        <Toaster />
-      </QueryClientProvider>
-    </AuthProvider>
+    <QueryClientProvider client={queryClientInstance}>
+      <Router>
+        <StagingBanner />
+        <AppRoutes />
+      </Router>
+      <Toaster />
+    </QueryClientProvider>
   )
 }
 
