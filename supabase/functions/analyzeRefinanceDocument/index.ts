@@ -16,11 +16,14 @@ import OpenAI from "openai";
 // - The "live market rates" call uses Base44's `add_context_from_internet: true`
 //   (Gemini grounding via Google Search) with NO response_json_schema, returning
 //   a free-text response that's regex-parsed for embedded JSON. Replicated below
-//   via the Gemini SDK's `googleSearchRetrieval` tool — ⚠️ FLAG: this is a
-//   best-effort port of a specialized feature; grounding behavior/availability
-//   for the placeholder model should be re-verified once GEMINI_API_KEY is live.
-//   If grounding doesn't work as expected, the original's own fallback logic
-//   (FALLBACK_RATES + range validation a few lines below) already covers it —
+//   via the Gemini SDK's `googleSearch` tool (verified live 2026-07-29 —
+//   the older `googleSearchRetrieval` tool name is rejected by current Gemini
+//   models and was the root cause of a gateway-level 503 on every real
+//   request: the rejected promise was never awaited immediately, so the
+//   unhandled rejection crashed the isolate before the later `await
+//   ratesPromise` could catch it). If grounding doesn't work as expected,
+//   the original's own fallback logic (FALLBACK_RATES + range validation
+//   a few lines below) already covers it —
 //   a bad/missing live-rates result degrades gracefully either way.
 // - The OpenAI (gpt_5) calls pass file_urls for both images AND PDFs. Images are
 //   sent as `image_url` content parts (base64 data URI). PDFs are sent as `file`
@@ -142,7 +145,7 @@ async function invokeGemini({ model, prompt, fileUrls = [], schema = null, useSe
 
     const modelParams = { model };
     if (useSearchGrounding) {
-        modelParams.tools = [{ googleSearchRetrieval: {} }];
+        modelParams.tools = [{ googleSearch: {} }];
     }
     if (schema) {
         modelParams.generationConfig = {
