@@ -1,0 +1,54 @@
+
+[functions.agentPrompts]
+enabled = true
+verify_jwt = false
+import_map = "./functions/agentPrompts/deno.json"
+entrypoint = "./functions/agentPrompts/index.ts"
+
+[functions.buildQuickReport]
+enabled = true
+verify_jwt = false
+import_map = "./functions/buildQuickReport/deno.json"
+entrypoint = "./functions/buildQuickReport/index.ts"
+
+[functions.normalizeDocData]
+enabled = true
+verify_jwt = false
+import_map = "./functions/normalizeDocData/deno.json"
+entrypoint = "./functions/normalizeDocData/index.ts"
+
+[functions.shadowDebtEngine]
+enabled = true
+verify_jwt = false
+import_map = "./functions/shadowDebtEngine/deno.json"
+entrypoint = "./functions/shadowDebtEngine/index.ts"
+
+[functions.hitechRelocationEngine]
+enabled = true
+verify_jwt = false
+import_map = "./functions/hitechRelocationEngine/deno.json"
+entrypoint = "./functions/hitechRelocationEngine/index.ts"
+
+[functions.extractSingleChunk]
+enabled = true
+verify_jwt = false
+import_map = "./functions/extractSingleChunk/deno.json"
+entrypoint = "./functions/extractSingleChunk/index.ts"
+
+[functions.preScanDocuments]
+enabled = true
+verify_jwt = false
+import_map = "./functions/preScanDocuments/deno.json"
+entrypoint = "./functions/preScanDocuments/index.ts"
+
+[functions.consolidateExtractedData]
+enabled = true
+verify_jwt = false
+import_map = "./functions/consolidateExtractedData/deno.json"
+entrypoint = "./functions/consolidateExtractedData/index.ts"
+
+[functions.analyzeRefinanceDocument]
+enabled = true
+verify_jwt = false
+import_map = "./functions/analyzeRefinanceDocument/deno.json"
+entrypoint = "./functions/analyzeRefinanceDocument/index.ts"
