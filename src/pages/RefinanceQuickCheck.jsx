@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { base44 } from '@/api/base44Client';
-import { 
+import { supabase, uploadFileToStorage, parseInvokeError } from '@/api/supabaseClient';
+import {
   Upload, Loader2, DollarSign, 
   CheckCircle, AlertCircle, Lock, TrendingUp, X, ChevronDown, ChevronUp, Download
 } from 'lucide-react';
@@ -70,8 +70,14 @@ export default function RefinanceQuickCheck() {
 
     (async () => {
       try {
-        const lead = await base44.entities.RefinanceLead.get(id);
-        if (!lead) return;
+        // .single() errors (PGRST116) when zero rows match — treat that the same as "no lead"
+        // rather than surfacing it, matching the old entity.get()'s "returns falsy" behavior.
+        const { data: lead, error: leadError } = await supabase
+          .from('refinance_leads')
+          .select('*')
+          .eq('id', id)
+          .single();
+        if (leadError || !lead) return;
         setLeadId(lead.id);
         setTier(lead.tier || 'free');
         setContactFullName(lead.full_name || '');
@@ -130,12 +136,17 @@ export default function RefinanceQuickCheck() {
     setContactErrors({});
     setIsSubmittingContact(true);
     try {
-      const lead = await base44.entities.RefinanceLead.create({
-        full_name: contactFullName.trim(),
-        email: contactEmail.trim(),
-        phone: contactPhone.trim(),
-        id_number: contactIdNumber.trim()
-      });
+      const { data: lead, error: createError } = await supabase
+        .from('refinance_leads')
+        .insert({
+          full_name: contactFullName.trim(),
+          email: contactEmail.trim(),
+          phone: contactPhone.trim(),
+          id_number: contactIdNumber.trim()
+        })
+        .select()
+        .single();
+      if (createError) throw createError;
       setLeadId(lead.id);
       const url = new URL(window.location.href);
       url.searchParams.set('lead', lead.id);
@@ -151,7 +162,8 @@ export default function RefinanceQuickCheck() {
   const updateLead = async (data) => {
     if (!leadId) return;
     try {
-      await base44.entities.RefinanceLead.update(leadId, data);
+      const { error: updateError } = await supabase.from('refinance_leads').update(data).eq('id', leadId);
+      if (updateError) throw updateError;
     } catch (err) {
       console.error('Failed to update lead record:', err);
     }
@@ -181,8 +193,7 @@ export default function RefinanceQuickCheck() {
     let file_url = null;
 
     try {
-      const uploadResult = await base44.integrations.Core.UploadFile({ file: files[0] });
-      file_url = uploadResult.file_url;
+      file_url = await uploadFileToStorage(files[0]);
 
       // Build external debts array if user indicated they have extra debts
       const externalDebtsInput = hasExtraDebts
@@ -195,58 +206,67 @@ export default function RefinanceQuickCheck() {
               estimated_interest: parseFloat(d.estimated_interest) || 15
             }))
         : [];
-      
-      const result = await base44.functions.invoke('analyzeRefinanceDocument', {
-        file_url,
-        loan_period_years: 20,
-        transaction_type: transactionType,
-        external_debts_input: externalDebtsInput
+
+      const { data, error } = await supabase.functions.invoke('analyzeRefinanceDocument', {
+        body: {
+          file_url,
+          loan_period_years: 20,
+          transaction_type: transactionType,
+          external_debts_input: externalDebtsInput
+        }
       });
 
-      if (!result?.data?.success) {
-        const errorCode = result?.data?.errorCode;
-        const errorMsg = result?.data?.error || 'שגיאה בניתוח הקובץ. ודא שהמסמך הוא דף יתרת סילוק תקין מהבנק.';
-        // Show clear actionable message for all known error types
-        if (errorCode === 'TRACK_EXTRACTION_FAILED' || errorCode === 'EXTRACTION_FALLBACK_BLOCKED' || errorCode === 'NOT_A_PAYOFF_STATEMENT') {
-          setError(`❌ ${errorMsg}`);
-        } else {
-          setError(`❌ ${errorMsg}`);
-        }
+      if (error) {
+        // analyzeRefinanceDocument always returns HTTP 200, even for success:false analysis
+        // failures — a populated `error` here means a true gateway/network failure (502/timeout),
+        // not an analysis rejection. Throw so the outer catch's retry logic picks it up.
+        throw error;
+      }
+
+      if (!data?.success) {
+        const errorMsg = data?.error || 'שגיאה בניתוח הקובץ. ודא שהמסמך הוא דף יתרת סילוק תקין מהבנק.';
+        setError(`❌ ${errorMsg}`);
         return;
       }
 
-      setAnalysisResult({ ...result.data, file_url });
+      setAnalysisResult({ ...data, file_url });
       window.scrollTo({ top: 0, behavior: 'smooth' });
       updateLead({
         status: 'analyzed',
         file_url,
         has_extra_debts: hasExtraDebts,
         external_debts: externalDebtsInput,
-        analysis_result: result.data,
+        analysis_result: data,
         analyzed_at: new Date().toISOString()
       });
 
     } catch (err) {
       console.error('Analysis error:', err);
-      
-      // Retry once if we have the file_url already uploaded
-      if (file_url && (err.message?.includes('502') || err.message?.includes('timeout') || err.message?.includes('Network Error') || err.code === 'ERR_NETWORK')) {
+
+      // Retry once if we have the file_url already uploaded. supabase-js has no axios-style
+      // err.code/err.response — network/relay failures are FunctionsFetchError/FunctionsRelayError
+      // instances, and a genuine gateway timeout surfaces as a FunctionsHttpError whose message
+      // mentions the status. Match on message text (and error name) rather than the old axios shape.
+      const isRetryable = err?.message?.includes('502') || err?.message?.includes('504') || err?.message?.includes('timeout') || err?.message?.includes('Network Error') || err?.name === 'FunctionsFetchError' || err?.name === 'FunctionsRelayError';
+      if (file_url && isRetryable) {
         try {
-          const retryResult = await base44.functions.invoke('analyzeRefinanceDocument', {
-            file_url,
-            loan_period_years: 20,
-            transaction_type: transactionType
+          const { data: retryData, error: retryError } = await supabase.functions.invoke('analyzeRefinanceDocument', {
+            body: { file_url, loan_period_years: 20, transaction_type: transactionType }
           });
-          if (!retryResult?.data?.success) {
-            throw new Error(retryResult?.data?.error || 'שגיאה בניתוח הקובץ');
+          if (retryError) {
+            const errBody = await parseInvokeError(retryError);
+            throw new Error(errBody?.error || retryError.message || 'שגיאה בניתוח הקובץ');
           }
-          setAnalysisResult({ ...retryResult.data, file_url });
+          if (!retryData?.success) {
+            throw new Error(retryData?.error || 'שגיאה בניתוח הקובץ');
+          }
+          setAnalysisResult({ ...retryData, file_url });
           window.scrollTo({ top: 0, behavior: 'smooth' });
           updateLead({
             status: 'analyzed',
             file_url,
             has_extra_debts: hasExtraDebts,
-            analysis_result: retryResult.data,
+            analysis_result: retryData,
             analyzed_at: new Date().toISOString()
           });
           return;

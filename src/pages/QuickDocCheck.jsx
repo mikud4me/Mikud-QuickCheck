@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { supabase, uploadFileToStorage, parseInvokeError } from '@/api/supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -119,8 +119,8 @@ export default function QuickDocCheck() {
         const compressedFiles = await Promise.all(files.map(compressImage));
         const uploadResults = await Promise.all(
           compressedFiles.map(async (file) => {
-            const res = await base44.integrations.Core.UploadFile({ file });
-            return { url: res.file_url, name: file.name, type: file.type };
+            const url = await uploadFileToStorage(file);
+            return { url, name: file.name, type: file.type };
           })
         );
         toast.dismiss();
@@ -130,27 +130,32 @@ export default function QuickDocCheck() {
       }
 
       toast.loading('סורק מסמכים... (עשוי לקחת עד דקה)');
-      let response;
-      try {
-        response = await base44.functions.invoke('preScanDocuments', {
-          file_urls: urls.map(f => f.url)
-        });
-      } catch (firstErr) {
+      // supabase.functions.invoke resolves to { data: null, error } on any non-2xx response
+      // (preScanDocuments returns 400/500 on real failures) — not a thrown axios-style rejection,
+      // so retry logic branches on `error` here rather than a try/catch around the call.
+      const callPreScan = () => supabase.functions.invoke('preScanDocuments', {
+        body: { file_urls: urls.map(f => f.url) }
+      });
+      let { data, error } = await callPreScan();
+      if (error) {
         // retry אחד אוטומטי — רק אם לא שגיאת קובץ פגום
-        const errMsg = firstErr?.response?.data?.error || firstErr?.message || '';
-        if (errMsg.includes('פגום') || errMsg.includes('ריק') || errMsg.includes('FILE_CORRUPTED')) {
-          throw firstErr;
+        const errBody = await parseInvokeError(error);
+        const errMsg = errBody?.error || error.message || '';
+        if (errBody?.error_code === 'FILE_CORRUPTED' || errMsg.includes('פגום') || errMsg.includes('ריק') || errMsg.includes('FILE_CORRUPTED')) {
+          throw new Error(errMsg || 'סריקה נכשלה — קובץ פגום');
         }
         toast.dismiss();
         toast.loading('🔄 ניסיון נוסף... (תיק גדול)');
-        response = await base44.functions.invoke('preScanDocuments', {
-          file_urls: urls.map(f => f.url)
-        });
+        ({ data, error } = await callPreScan());
+        if (error) {
+          const retryErrBody = await parseInvokeError(error);
+          throw new Error(retryErrBody?.error || error.message || 'הסריקה נכשלה');
+        }
       }
       toast.dismiss();
 
-      if (response.data.error) throw new Error(response.data.error);
-      setPreScanResult(response.data);
+      if (data.error) throw new Error(data.error);
+      setPreScanResult(data);
       toast.success('✅ סריקה הושלמה!');
     } catch (error) {
       toast.dismiss();
@@ -167,25 +172,12 @@ export default function QuickDocCheck() {
 
   // נקרא אחרי חילוץ הנתונים — מייצר שאלות ממוקדות
   // מחזיר true אם יש שאלות (צריך לעצור ולחכות), false אם אין (ממשיכים לדוח)
-  const generateQuestionsAndCheck = async (extractedData, activeReportType) => {
-    setIsGeneratingQuestions(true);
-    try {
-      const response = await base44.functions.invoke('generateIntakeQuestions', {
-        extractedData,
-        reportType: activeReportType
-      });
-      if (response.data?.questions?.length > 0) {
-        setIntakeQuestions(response.data.questions);
-        setIntakeDiagnosis(response.data.diagnosis || null);
-        return true; // יש שאלות — עצור
-      }
-      return false; // אין שאלות — המשך לדוח
-    } catch (err) {
-      console.warn('Could not generate questions:', err);
-      return false; // שגיאה — המשך לדוח בלי שאלות
-    } finally {
-      setIsGeneratingQuestions(false);
-    }
+  // DEFERRED: generateIntakeQuestions was never ported to Supabase, and this wrapper is
+  // dead code anyway — nothing in the real flow calls generateQuestionsAndCheck. Left
+  // inert (no base44/supabase call) rather than wired up. See task memory:
+  // "generateIntakeQuestions ... dead code path already ... don't waste time on it."
+  const generateQuestionsAndCheck = async (_extractedData, _activeReportType) => {
+    return false; // אין שאלות — המשך לדוח
   };
 
   const runQuickCheck = async (overrideReportType, intakeAnswers = null) => {
@@ -213,8 +205,8 @@ export default function QuickDocCheck() {
         // שלב 2: העלאה במקביל
         const uploadResults = await Promise.all(
           compressedFiles.map(async (file) => {
-            const res = await base44.integrations.Core.UploadFile({ file });
-            return { url: res.file_url, name: file.name, type: file.type };
+            const url = await uploadFileToStorage(file);
+            return { url, name: file.name, type: file.type };
           })
         );
         toast.dismiss();
@@ -262,29 +254,39 @@ export default function QuickDocCheck() {
           // battle-tested extraction engine and is cache-backed by file_url (DocumentExtractionCache):
           // the first upload pays the full cost once; every later flow that touches the same
           // physical file (including this prospect's own eventual real case) reuses the result.
-          const r = await base44.functions.invoke('extractSingleChunk', { file_url: batch[0] });
+          // supabase.functions.invoke resolves { data, error } — it does NOT throw on non-2xx,
+          // and (unlike the old Base44/axios SDK) there is no r.status to check. extractSingleChunk
+          // always returns HTTP 200 (even on extraction failure, via { error, _failed: true }), so a
+          // populated `error` here means a real network/relay failure, not an extraction failure.
+          const { data, error } = await supabase.functions.invoke('extractSingleChunk', { body: { file_url: batch[0] } });
+          if (error) {
+            const errBody = await parseInvokeError(error);
+            const e = new Error(errBody?.error || error.message || `🛑 השרת קרס — חילוץ ${label} נכשל`);
+            e.errorCode = errBody?.error_code || 'SERVER_CRASH';
+            throw e;
+          }
           // ── ROOT-CAUSE FIX: typeof null === 'object' עבר את הבדיקה הישנה! ──
           // כש-500 תשתיתי מחזיר גוף עם data:null, הבדיקה הקודמת אישרה אותו (כי typeof null==='object'),
           // והקוד למטה ניגש ל-data.borrowers על null → "Cannot read properties of null (reading 'borrowers')".
           // עכשיו חוסמים במפורש null + מוודאים ש-borrowers הוא מערך לפני שמחזירים.
-          if (!r || r.data === null || r.data === undefined || typeof r.data !== 'object' || Array.isArray(r.data) || r.status >= 400) {
-            const e = new Error(r?.data?.error || `🛑 השרת קרס — חילוץ ${label} נכשל`);
-            e.errorCode = r?.data?.error_code || 'SERVER_CRASH';
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            const e = new Error(`🛑 השרת קרס — חילוץ ${label} נכשל`);
+            e.errorCode = 'SERVER_CRASH';
             throw e;
           }
           // extractSingleChunk returns status 200 even on extraction failures — check body.
           // Its failure convention is { error, _failed: true } (not extractDocData's error_code).
-          if (r.data._failed && !r.data.borrowers?.length && !r.data.payslips_borrower1?.length && !r.data.loans?.length) {
-            const e = new Error(r.data.error || `לא ניתן לחלץ נתונים מהמסמכים שהועלו.`);
+          if (data._failed && !data.borrowers?.length && !data.payslips_borrower1?.length && !data.loans?.length) {
+            const e = new Error(data.error || `לא ניתן לחלץ נתונים מהמסמכים שהועלו.`);
             e.errorCode = 'EXTRACTION_FAILED';
             throw e;
           }
-          return r.data;
+          return data;
         } catch (invokeErr) {
-          const msg = invokeErr?.response?.data?.error || invokeErr?.message || '';
-          const is504 = invokeErr?.response?.status === 504 || msg.includes('504') || msg.includes('Gateway');
+          const msg = invokeErr?.message || '';
+          const is504 = invokeErr?.status === 504 || msg.includes('504') || msg.includes('Gateway');
           const e = new Error(is504 ? '⏱️ זמן קצוב חרג (504) — הקובץ גדול מדי. מנסה לפצל ולשלוח מחדש.' : (msg || `🛑 השרת קרס — חילוץ ${label} נכשל`));
-          e.errorCode = is504 ? 'TIMEOUT' : (invokeErr?.response?.data?.error_code || invokeErr?.errorCode || 'SERVER_CRASH');
+          e.errorCode = is504 ? 'TIMEOUT' : (invokeErr?.errorCode || 'SERVER_CRASH');
           throw e;
         }
       };
@@ -348,12 +350,12 @@ export default function QuickDocCheck() {
           // לפני שליחה ל-Gather מכווצים כל JSON חלקי: מוחקים שדות כבדים (raw_text, page_numbers)
           // ומערכים/אובייקטים ריקים. כך ה-Payload יורד דרמטית וה-InvokeLLM מסיים לפני רף ה-Gateway.
           const minifiedPartials = minifyPartialResults(partialResults);
-          const consolidateRes = await base44.functions.invoke('consolidateExtractedData', {
-            partialResults: minifiedPartials,
-            reportType: activeReportType
+          const { data: consolidateData, error: consolidateError } = await supabase.functions.invoke('consolidateExtractedData', {
+            body: { partialResults: minifiedPartials, reportType: activeReportType }
           });
           toast.dismiss();
-          const c = consolidateRes?.data?.consolidated;
+          if (consolidateError) throw consolidateError; // caught below — non-critical, falls back to deterministic merge
+          const c = consolidateData?.consolidated;
           if (c && typeof c === 'object' && Array.isArray(c.borrowers) && c.borrowers.length > 0) {
             // הפרופיל המאוחד גובר — אך שומרים על מערכי הליבה שנאספו אם ה-AI החזיר ריקים
             extractedData = {
@@ -435,23 +437,29 @@ export default function QuickDocCheck() {
       };
 
       // שלב 2: נרמול דטרמיניסטי — ניקוי פלט ה-AI לפני חישובים
-      const normalizeResponse = await base44.functions.invoke('normalizeDocData', {
-        rawData: cleanedRawData,
-        reportType: activeReportType
+      // normalizeDocData returns 400/500 on real failures (non-2xx) — supabase.functions.invoke
+      // surfaces that as { data: null, error }, not a thrown axios-style rejection with .status.
+      const { data: normalizedData0, error: normalizeError } = await supabase.functions.invoke('normalizeDocData', {
+        body: { rawData: cleanedRawData, reportType: activeReportType }
       });
-      if (!normalizeResponse.data || normalizeResponse.status >= 400 || normalizeResponse.data.error) {
-        throw new Error('שגיאה בנרמול: ' + (normalizeResponse.data?.error || 'תגובת שרת שגויה'));
+      if (normalizeError) {
+        const errBody = await parseInvokeError(normalizeError);
+        throw new Error('שגיאה בנרמול: ' + (errBody?.error || normalizeError.message || 'תגובת שרת שגויה'));
       }
-      let normalizedRawData = normalizeResponse.data;
+      if (!normalizedData0 || normalizedData0.error) {
+        throw new Error('שגיאה בנרמול: ' + (normalizedData0?.error || 'תגובת שרת שגויה'));
+      }
+      let normalizedRawData = normalizedData0;
 
-      // שלב 2.5: Shadow Debt Engine — זיהוי חובות נסתרים (Circuit Breaker: לעולם לא קורס)
+      // שלב 2.5: Shadow Debt Engine — זיהוי חובות נסתרים (Circuit Breaker: לעולם לא קורס, תמיד מחזיר 200)
       try {
         setProgress(62);
-        const shadowResponse = await base44.functions.invoke('shadowDebtEngine', {
-          normalizedData: normalizedRawData
+        const { data: shadowData, error: shadowError } = await supabase.functions.invoke('shadowDebtEngine', {
+          body: { normalizedData: normalizedRawData }
         });
-        if (shadowResponse.data && !shadowResponse.data._shadow_debt?._engine_failed) {
-          normalizedRawData = shadowResponse.data;
+        if (shadowError) throw shadowError;
+        if (shadowData && !shadowData._shadow_debt?._engine_failed) {
+          normalizedRawData = shadowData;
         }
       } catch (shadowErr) {
         console.warn('shadowDebtEngine skipped (non-critical):', shadowErr.message);
@@ -459,31 +467,40 @@ export default function QuickDocCheck() {
 
       // שלב 2.7: מנוע רילוקיישן + הייטק — מאחד מעסיק גלובלי, ESPP מ-note, אימות שם דו-לשוני
       try {
-        const relocResponse = await base44.functions.invoke('hitechRelocationEngine', {
-          rawData: normalizedRawData
+        const { data: relocData, error: relocError } = await supabase.functions.invoke('hitechRelocationEngine', {
+          body: { rawData: normalizedRawData }
         });
-        if (relocResponse.data && !relocResponse.data.error) {
-          normalizedRawData = relocResponse.data;
+        if (relocError) throw relocError;
+        if (relocData && !relocData.error) {
+          normalizedRawData = relocData;
         }
       } catch (relocErr) {
         console.warn('hitechRelocationEngine skipped (non-critical):', relocErr.message);
       }
 
       // שלב 3: חישובים + מכתב לבנק
-      const reportResponse = await base44.functions.invoke('buildQuickReport', {
-        rawData: normalizedRawData,
-        reportType: activeReportType,
-        additionalAmountNum: additionalAmountNum,
-        manualPropertyValue: manualPropertyValue ? parseInt(String(manualPropertyValue).replace(/,/g, '')) || 0 : 0,
-        proposedMortgagePayment: proposedMortgagePayment ? parseInt(String(proposedMortgagePayment).replace(/,/g, '')) || 0 : 0,
-        intakeAnswers: intakeAnswers || {},
+      // buildQuickReport's fatal catch always returns 400 (see index.ts) — a real failure here
+      // is a non-2xx response, i.e. supabase gives us { data: null, error }, not thrown data.
+      const { data: reportData, error: reportError } = await supabase.functions.invoke('buildQuickReport', {
+        body: {
+          rawData: normalizedRawData,
+          reportType: activeReportType,
+          additionalAmountNum: additionalAmountNum,
+          manualPropertyValue: manualPropertyValue ? parseInt(String(manualPropertyValue).replace(/,/g, '')) || 0 : 0,
+          proposedMortgagePayment: proposedMortgagePayment ? parseInt(String(proposedMortgagePayment).replace(/,/g, '')) || 0 : 0,
+          intakeAnswers: intakeAnswers || {},
+        }
       });
 
-      if (!reportResponse.data || reportResponse.status >= 400 || reportResponse.data.error) {
-        throw new Error(reportResponse.data?.error || 'בניית הדוח נכשלה — תגובת שרת שגויה');
+      if (reportError) {
+        const errBody = await parseInvokeError(reportError);
+        throw new Error(errBody?.error || reportError.message || 'בניית הדוח נכשלה — תגובת שרת שגויה');
+      }
+      if (!reportData || reportData.error) {
+        throw new Error(reportData?.error || 'בניית הדוח נכשלה — תגובת שרת שגויה');
       }
 
-      const analysis = reportResponse.data;
+      const analysis = reportData;
       setProgress(100);
 
       // ── בדיקת שלמות נתונים קריטיים — אם אין שם/ת.ז/הכנסה → הצג אזהרה מפורשת ←
@@ -575,257 +592,19 @@ export default function QuickDocCheck() {
   };
 
   // ── יצירת תיק הגשה מלא (מכתב נלווה + מסמכים ממוזגים) ──
+  // DEFERRED: relied on base44.entities.MortgageCase/Document and buildUnifiedSubmissionPdf,
+  // none of which exist on the Supabase infra (webhook hand-off to the live Base44 app is the
+  // planned replacement but isn't built yet). Kept in place — same signature, same button wired
+  // up in QuickCheckReport — but made inert so it fails safely instead of throwing.
   const buildFullPackage = async () => {
-    if (!result || !result.borrower_info) {
-      toast.error('נתוני ניתוח חסרים');
-      return;
-    }
-    if (uploadedFileUrls.length === 0) {
-      toast.error('אין מסמכים מועלים לתיק');
-      return;
-    }
-    try {
-      toast.loading('יוצר תיק ומסמכים...');
-
-      const bi = result.borrower_info || {};
-
-      // ── בניית scoreObject מלא מתוך תוצאת הבדיקה המהירה ──
-      // כל הנתונים שכבר חושבו ב-buildQuickReport מוזרקים לדוח ההגשה
-      const scoreObject = {
-        kpi: {
-          risk_score: null,
-          rating: null,
-          rating_label: null,
-          ltv: bi.ltv ?? null,
-          pti_unified: bi.pti_ratio ?? null,
-          pti_with_proposed: bi.pti_with_proposed ?? null,
-          verified_income: bi.total_household_income ?? null,
-          income_b1: bi.avg_income ?? null,
-          income_b2: bi.avg_income_2 ?? null,
-          total_liabilities: (bi.total_household_income != null && bi.monthly_net_cashflow != null)
-            ? Math.max(0, bi.total_household_income - bi.monthly_net_cashflow) : null,
-          available_for_mortgage: bi.available_for_mortgage ?? null,
-          max_allowed_payment: bi.max_allowed_mortgage_payment ?? null,
-          free_cash_flow: bi.monthly_net_cashflow ?? null,
-        },
-        borrowers: {
-          borrower1: {
-            name: bi.name || '',
-            id_masked: bi.id ? '****' + String(bi.id).slice(-4) : '',
-            employment_type: bi.employment_type || '',
-            employer: bi.employer || '',
-            seniority_years: bi.seniority_years || '',
-            secondary_income: 0,
-            payslips_count: (result.income_months || []).length || '',
-          },
-          borrower2: bi.name_2 ? {
-            name: bi.name_2,
-            id_masked: bi.id_2 ? '****' + String(bi.id_2).slice(-4) : '',
-            employment_type: bi.employment_type_2 || '',
-            employer: bi.employer_2 || '',
-            seniority_years: bi.seniority_years_2 || '',
-          } : null,
-        },
-        // מכתב הליווי המוכן מ-buildQuickReport — עדיף על יצירה מחדש ב-LLM
-        bankerLetter: result.bankerLetter || null,
-      };
-
-      // 1. יצירת תיק MortgageCase — כולל primary/secondary borrower מלאים + score_data
-      const caseNumber = `MKD-${Date.now().toString().slice(-6)}`;
-      const newCase = await base44.entities.MortgageCase.create({
-        case_number: caseNumber,
-        primary_borrower: {
-          full_name: bi.name || '',
-          id_number: bi.id || '',
-          employer: bi.employer || '',
-          employment_type: bi.employment_type || '',
-          seniority_years: bi.seniority_years || 0,
-          monthly_net_income: bi.avg_income || 0,
-        },
-        secondary_borrower: bi.name_2 ? {
-          full_name: bi.name_2 || '',
-          id_number: bi.id_2 || '',
-          employer: bi.employer_2 || '',
-          employment_type: bi.employment_type_2 || '',
-          monthly_net_income: bi.avg_income_2 || 0,
-        } : undefined,
-        score_data: scoreObject,
-        documents: uploadedFileUrls.map(f => f.url),
-        notes: JSON.stringify({ quickCheckAnalysis: { ...result, reportType } }),
-      });
-
-      // 2. יצירת רשומות Document לכל קובץ שהועלה
-      await base44.entities.Document.bulkCreate(
-        uploadedFileUrls.map(f => ({
-          case_id: newCase.id,
-          document_type: 'other',
-          file_url: f.url,
-          borrower_id: bi.id || '',
-        }))
-      );
-
-      // 3. הפעלת פונקציית התיק המאוחד — עם scoreObject מלא
-      toast.dismiss();
-      toast.loading('בונה תיק הגשה מלא (מכתב נלווה + מסמכים)...');
-      const response = await base44.functions.invoke('buildUnifiedSubmissionPdf', {
-        caseId: newCase.id,
-        mode: 'quick_check',
-        scoreObject,
-      });
-      toast.dismiss();
-
-      const data = response.data;
-      if (data?.error) throw new Error(data.error);
-
-      // 4. הורדת הדוח (HTML) כקובץ למחשב — אמין יותר מ-window.open
-      if (data?.html_base64) {
-        const htmlStr = decodeURIComponent(escape(atob(data.html_base64)));
-        const htmlBlob = new Blob([htmlStr], { type: 'text/html;charset=utf-8' });
-        const htmlUrl = URL.createObjectURL(htmlBlob);
-        const aHtml = document.createElement('a');
-        aHtml.href = htmlUrl;
-        aHtml.download = data.filename || `mikud-submission-${caseNumber}.html`;
-        document.body.appendChild(aHtml);
-        aHtml.click();
-        aHtml.remove();
-        // פתיחה גם בכרטיסייה חדשה לצפייה מיידית (אם הדפדפן מאפשר)
-        try { window.open(htmlUrl, '_blank'); } catch { /* popup blocked — already downloaded */ }
-      }
-
-      // 5. הורדת המסמכים הממוזגים (PDF) אם קיימים
-      if (data?.merged_pdf_base64) {
-        const byteChars = atob(data.merged_pdf_base64);
-        const byteArr = new Uint8Array(byteChars.length);
-        for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
-        const pdfBlob = new Blob([byteArr], { type: 'application/pdf' });
-        const pdfUrl = URL.createObjectURL(pdfBlob);
-        const aPdf = document.createElement('a');
-        aPdf.href = pdfUrl;
-        aPdf.download = data.merged_pdf_filename || `mikud-source-docs-${caseNumber}.pdf`;
-        document.body.appendChild(aPdf);
-        aPdf.click();
-        aPdf.remove();
-      }
-
-      toast.dismiss();
-      const merged = data?.docs_merged || 0;
-      const total = data?.docs_total || uploadedFileUrls.length;
-      const skipped = (data?.docs_skipped || []).length;
-      // הודעת סיכום מפורטת — מסבירה כמה מוזגו וכמה דולגו ולמה
-      toast.success(
-        `✅ תיק הגשה ירד למחשב! מוזגו ${merged} מתוך ${total} מסמכים${skipped > 0 ? ` (${skipped} דולגו — אינם PDF או לא נטענו)` : ''}. בדוק בתיקיית ההורדות (Downloads).`,
-        { duration: 9000 }
-      );
-      if (skipped > 0) {
-        console.warn('מסמכים שדולגו במיזוג:', data.docs_skipped);
-      }
-    } catch (error) {
-      toast.dismiss();
-      console.error('buildFullPackage error:', error);
-      toast.error('שגיאה ביצירת תיק ההגשה: ' + (error?.response?.data?.error || error.message));
-    }
+    toast.error('התכונה הזו עדיין לא זמינה');
   };
 
+  // DEFERRED: relied on base44.entities.MortgageCase.create, which doesn't exist on the
+  // Supabase infra (webhook hand-off to the live Base44 app is the planned replacement but
+  // isn't built yet). Kept in place — same signature, same button — but made inert.
   const transferToFullProcess = async () => {
-    if (!result || !result.borrower_info) {
-      toast.error('נתוני ניתוח חסרים');
-      return;
-    }
-
-    try {
-      toast.loading('יוצר תיק ומעביר לתהליך מלא...');
-
-      // קביעת case_type לפי reportType
-      const caseTypeMapping = {
-        'מחזור משכנתא': 'refinance',
-        'מחזור משכנתא + תוספת הון': 'refinance',
-        'מיחזור משכנתא ואיחוד חובות': 'refinance',
-        'רכישת נכס חדש': 'new_mortgage',
-        'בעלי עסקים וחברות': 'new_mortgage',
-        'גיל הזהב': 'refinance'
-      };
-
-      let caseType = 'new_mortgage';
-      if (reportType === 'זיהוי אוטומטי' && result.detected_case_types) {
-          if (result.detected_case_types.includes('מחזור משכנתא') || result.detected_case_types.includes('מיחזור משכנתא ואיחוד חובות')) {
-              caseType = 'refinance';
-          }
-      } else {
-          caseType = caseTypeMapping[reportType] || 'new_mortgage';
-      }
-
-      // Ensure we use the detected case type if it's auto-triage, otherwise the selected one
-      const finalReportType = reportType === 'זיהוי אוטומטי' && result.detected_case_types ? result.detected_case_types.join(', ') : reportType;
-
-      // הכנת נתוני התיק
-      const caseNumber = `MKD-${Date.now().toString().slice(-6)}`;
-      const fullName = result.borrower_info.name || '';
-      const nameParts = fullName.trim().split(' ');
-      const lastName = nameParts.pop() || '';
-      const firstName = nameParts.join(' ') || '';
-
-      const caseData = {
-        case_number: caseNumber,
-        case_type: caseType,
-        primary_borrower: {
-          full_name: fullName,
-          id_number: result.borrower_info.id || '',
-          employer: result.borrower_info.employer || '',
-          employment_type: 'salaried',
-          monthly_net_income: result.borrower_info.avg_income || 0,
-        },
-        last_name: lastName,
-        first_name: firstName,
-        id_number: result.borrower_info.id || '',
-        age: result.borrower_info.age || null,
-        employment_status: 'salaried',
-        monthly_income: result.borrower_info.avg_income || 0,
-        status: 'new',
-        analysis_status: 'pending',
-        income_analysis: {
-          avg_net_salary: result.borrower_info.avg_income || 0,
-          employer_name: result.borrower_info.employer || '',
-          documents_count: {
-            payslips: uploadedFileUrls.length
-          }
-        },
-        // documents שומר רק את ה-URL כ-string
-        documents: uploadedFileUrls.map(f => f.url),
-        // שמור notes כ-JSON עם quickCheckAnalysis כדי ש-ClientWorkflow יזהה שמדובר בתיק מבדיקה מהירה
-        notes: JSON.stringify({
-          quickCheckAnalysis: { ...result, reportType: finalReportType },
-          detected_report_type: finalReportType
-        })
-      };
-
-      // אם זה מחזור ויש נתוני משכנתא קיימת - נוסיף אותם
-      if (caseType === 'refinance' && result.existing_mortgage && result.existing_mortgage.remaining_balance) {
-        caseData.existing_mortgage = result.existing_mortgage;
-        // גם loan_period_years לפי החודשים הנותרים
-        caseData.loan_period_years = Math.ceil(result.existing_mortgage.remaining_months / 12);
-        caseData.loan_requested = result.existing_mortgage.remaining_balance;
-        // מחזור + תוספת: loan_requested = יתרה + תוספת
-        if (result.additional_equity_requested && result.additional_equity_requested > 0) {
-          caseData.loan_requested = result.existing_mortgage.remaining_balance + result.additional_equity_requested;
-        }
-      }
-
-      // יצירת התיק
-      const newCase = await base44.entities.MortgageCase.create(caseData);
-
-      toast.dismiss();
-      toast.success('✅ התיק נוצר בהצלחה!');
-      
-      // מעבר לתהליך הדיגיטלי עם ה-case_id
-      setTimeout(() => {
-        navigate(createPageUrl('ClientWorkflow') + '?caseId=' + newCase.id);
-      }, 1000);
-
-    } catch (error) {
-      toast.dismiss();
-      console.error('Error creating case:', error);
-      toast.error('שגיאה ביצירת התיק: ' + error.message);
-    }
+    toast.error('התכונה הזו עדיין לא זמינה');
   };
 
   const isRefinancePlusType = reportType === 'מחזור משכנתא + תוספת הון';
