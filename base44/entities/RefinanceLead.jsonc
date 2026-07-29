@@ -1,0 +1,91 @@
+{
+  "name": "RefinanceLead",
+  "type": "object",
+  "properties": {
+    "full_name": {
+      "type": "string",
+      "description": "שם מלא"
+    },
+    "email": {
+      "type": "string",
+      "description": "אימייל"
+    },
+    "phone": {
+      "type": "string",
+      "description": "טלפון"
+    },
+    "id_number": {
+      "type": "string",
+      "description": "תעודת זהות"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "lead",
+        "analyzed",
+        "error"
+      ],
+      "default": "lead",
+      "description": "סטטוס: ליד בלבד / נותח בהצלחה / שגיאה בניתוח"
+    },
+    "file_url": {
+      "type": "string",
+      "description": "קישור לדף יתרת הסילוק שהועלה"
+    },
+    "has_extra_debts": {
+      "type": "boolean",
+      "description": "האם דיווח על חובות נוספים מחוץ למשכנתא"
+    },
+    "external_debts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "creditor": {
+            "type": "string"
+          },
+          "monthly_repayment": {
+            "type": "number"
+          },
+          "remaining_balance": {
+            "type": "number"
+          },
+          "estimated_interest": {
+            "type": "number"
+          }
+        }
+      },
+      "description": "חובות חיצוניים שדווחו על ידי המשתמש"
+    },
+    "analysis_result": {
+      "type": "object",
+      "description": "תוצאת הניתוח המלאה מ-analyzeRefinanceDocument"
+    },
+    "analyzed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "מועד השלמת הניתוח"
+    },
+    "tier": {
+      "type": "string",
+      "enum": [
+        "free",
+        "paid",
+        "premium"
+      ],
+      "default": "free",
+      "description": "רמת הגישה לדוח: חינם / בתשלום / פרימיום"
+    },
+    "tier_unlocked_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "מועד שדרוג הרמה בפועל"
+    }
+  },
+  "required": [
+    "full_name",
+    "email",
+    "phone",
+    "id_number"
+  ]
+}
