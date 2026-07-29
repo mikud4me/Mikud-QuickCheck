@@ -14,7 +14,15 @@ export const supabase = createClient(
 // required because extractSingleChunk/analyzeRefinanceDocument fetch() the file
 // server-side and the bucket has no public read policy, only anon insert+select.
 export async function uploadFileToStorage(file) {
-  const path = `uploads/${crypto.randomUUID()}-${file.name}`;
+  // Deliberately drop the original filename from the storage path — a Hebrew
+  // (or any non-ASCII/special-character) filename embedded in the object key
+  // was breaking downstream signed-URL construction/fetching with a 400 Bad
+  // Request (found via live testing 2026-07-29). A UUID + the file's own
+  // extension is always ASCII-safe and carries everything the backend
+  // functions need (they only ever inspect the extension, never the name).
+  const extMatch = file.name.match(/\.[a-zA-Z0-9]+$/);
+  const ext = extMatch ? extMatch[0] : '';
+  const path = `uploads/${crypto.randomUUID()}${ext}`;
   const { error: uploadError } = await supabase.storage.from('documents').upload(path, file);
   if (uploadError) throw uploadError;
   const { data: signedData, error: signedError } = await supabase.storage
