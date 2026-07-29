@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, X, Send, Loader2, Calculator, FileText, TrendingUp, Phone, ChevronDown } from 'lucide-react';
+import { MessageCircle, X, Send, Loader2, FileText, TrendingUp, Phone, ChevronDown } from 'lucide-react';
 import { Button } from "@/components/ui/button";
-import { base44 } from '@/api/base44Client';
+import { supabase } from '@/api/supabaseClient';
 import { createPageUrl } from '@/utils';
 import ReactMarkdown from 'react-markdown';
 
@@ -72,10 +72,12 @@ const FAQ_CHIPS = [
   { label: '⏱️ כמה זמן לוקח?', question: 'כמה זמן לוקח תהליך קבלת המשכנתא?' },
 ];
 
+// Only the two pages that actually exist in this standalone app — the original
+// had a 3rd action ("פתח תיק" -> ClientWorkflow, "מחשבון" -> Calculator) pointing
+// at pages that were deliberately stripped out of this scoped build.
 const QUICK_ACTIONS = [
   { icon: TrendingUp, label: 'בדיקת מחזור', page: 'RefinanceQuickCheck', color: 'bg-green-600 hover:bg-green-700' },
-  { icon: FileText, label: 'פתח תיק', page: 'ClientWorkflow', color: 'bg-blue-600 hover:bg-blue-700' },
-  { icon: Calculator, label: 'מחשבון', page: 'Calculator', color: 'bg-slate-700 hover:bg-slate-800' },
+  { icon: FileText, label: 'בדיקה מהירה', page: 'QuickDocCheck', color: 'bg-blue-600 hover:bg-blue-700' },
 ];
 
 export default function MortgageChatbot() {
@@ -121,8 +123,9 @@ export default function MortgageChatbot() {
       .join('\n');
 
     try {
-      const response = await base44.integrations.Core.InvokeLLM({
-        prompt: `${KNOWLEDGE_BASE}
+      const { data, error } = await supabase.functions.invoke('chatWithMiko', {
+        body: {
+          prompt: `${KNOWLEDGE_BASE}
 
 ## היסטוריית השיחה:
 ${conversationHistory}
@@ -130,13 +133,12 @@ ${conversationHistory}
 ## שאלת הלקוח כעת:
 ${userMsg}
 
-ענה בעברית, בצורה ידידותית ומקצועית. קצר וברור.`,
-        add_context_from_internet: false
+ענה בעברית, בצורה ידידותית ומקצועית. קצר וברור.`
+        }
       });
+      if (error) throw error;
 
-      const replyText = typeof response === 'string' 
-        ? response 
-        : (response?.response || response?.text || 'מצטער, לא הצלחתי לענות. נסה שוב או פנה אלינו ב-*2324');
+      const replyText = data?.text || 'מצטער, לא הצלחתי לענות. נסה שוב או פנה אלינו ב-*2324';
 
       setMessages(prev => [...prev, { role: 'assistant', text: replyText }]);
     } catch {
