@@ -29,12 +29,11 @@ import { correctUnverifiedBorrowerIds } from "../_shared/mergeExtractedDocuments
  *   (a cache miss/failure never blocked extraction), so removing them is safe.
  */
 
-// ⚠️ PLACEHOLDER MODEL ID — NEEDS HUMAN VERIFICATION ONCE GEMINI_API_KEY IS LIVE.
-// Base44's "gemini_3_flash" is Base44's OWN internal alias — there is no public
-// mapping to a real Gemini model ID. 'gemini-2.5-flash' is a real, currently-valid
-// Gemini API model chosen as the closest known-good equivalent (fast/cheap flash
-// tier). Confirm/replace once you can test against the real Gemini API.
-const EXTRACTION_MODEL = 'gemini-2.5-flash';
+// VERIFIED against the live Gemini API (2026-07-29): gemini-3-flash-preview
+// responds successfully with this key, on the free tier. 'gemini-2.5-flash' (the
+// original placeholder) is confirmed dead — Google's API returns "no longer
+// available to new users" for it.
+const EXTRACTION_MODEL = 'gemini-3-flash-preview';
 
 // ⚠️ מגבלת Deno ~150s. שתי סכמות רצות במקביל (Promise.all) — זמן כולל = max(Schema0, Schema1).
 // ללא re-upload: זמן = max(Schema0, Schema1) ≈ 80-120s בלבד ✅
@@ -438,7 +437,13 @@ function bytesToBase64(bytes) {
 
 const MIME_MAP = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
 const guessMimeType = (url) => {
-    const ext = url.split('.').pop()?.split('?')[0]?.toLowerCase() || 'pdf';
+    // Strip the query string BEFORE splitting on '.' — Supabase signed URLs embed
+    // a JWT (header.payload.signature) in the query string, and JWTs contain dots
+    // themselves. Splitting on '.' first (the original order) grabs a fragment of
+    // the token instead of the real file extension. Bug found via live smoke test
+    // (2026-07-29) on the sibling preScanDocuments function; fixed here too since
+    // this file has the identical pattern.
+    const ext = url.split('?')[0]?.split('.').pop()?.toLowerCase() || 'pdf';
     return MIME_MAP[ext] || 'application/octet-stream';
 };
 
@@ -494,7 +499,9 @@ export default {
             if (!fetchRes.ok) throw new Error(`fetch failed: ${fetchRes.status}`);
             const arrayBuffer = await fetchRes.arrayBuffer();
             const uint8 = new Uint8Array(arrayBuffer);
-            const ext = file_url.split('.').pop()?.split('?')[0]?.toLowerCase() || 'pdf';
+            // Same query-string-before-dot-split fix as guessMimeType() above —
+            // file_url here is the original (often signed, JWT-bearing) input URL.
+            const ext = file_url.split('?')[0]?.split('.').pop()?.toLowerCase() || 'pdf';
             const mimeType = MIME_MAP[ext] || 'application/octet-stream';
             const storagePath = `chunk-uploads/chunk_${Date.now()}_${crypto.randomUUID()}.${ext}`;
 

@@ -26,13 +26,10 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 // original's "must be logged in" gate while keeping the same custom
 // Unauthorized JSON envelope/status the original returned).
 
-// ⚠️ PLACEHOLDER MODEL ID — NEEDS HUMAN VERIFICATION ONCE GEMINI_API_KEY IS LIVE.
-// Base44's "gemini_3_1_pro" is Base44's OWN internal alias — no public mapping
-// exists. 'gemini-2.5-pro' is a real, currently-valid Gemini API model chosen as
-// the closest known-good equivalent (the stronger "pro" tier, matching the
-// original's choice of its strongest model for this entity-resolution step).
-// Confirm/replace once you can test against the real Gemini API.
-const CONSOLIDATION_MODEL = 'gemini-2.5-pro';
+// VERIFIED against the live Gemini API (2026-07-29): gemini-3.1-pro-preview
+// responds successfully with this key/billing setup. Requires billing enabled
+// on the Google AI Studio project — the free tier has a 0 quota for this model.
+const CONSOLIDATION_MODEL = 'gemini-3.1-pro-preview';
 
 // ── JSON Schema (plain, Base44/OpenAPI-style) → Gemini's Schema format
 // (uppercase SchemaType enum). See preScanDocuments/index.ts for the same helper. ──

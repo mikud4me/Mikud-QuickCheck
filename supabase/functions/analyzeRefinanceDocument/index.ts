@@ -37,15 +37,12 @@ import OpenAI from "openai";
 //   is live and can be tested end-to-end.
 // ────────────────────────────────────────────────────────────────────────────
 
-// ⚠️ PLACEHOLDER MODEL IDs — NEED HUMAN VERIFICATION ONCE API KEYS ARE LIVE.
-// Base44's "gemini_3_flash" / "gpt_5" are Base44's OWN internal aliases — no
-// public mapping to real provider model IDs exists.
-//   - GEMINI_FLASH_MODEL: 'gemini-2.5-flash' — real, currently-valid Gemini API
-//     model, closest known-good equivalent to the "flash" tier used originally.
-//   - GPT_MODEL: 'gpt-5' — OpenAI's GPT-5 model ID as best known at the time of
-//     this port; confirm the exact API model string is live/correct once
-//     OPENAI_API_KEY is configured.
-const GEMINI_FLASH_MODEL = 'gemini-2.5-flash';
+// GEMINI_FLASH_MODEL VERIFIED against the live Gemini API (2026-07-29):
+// gemini-3-flash-preview responds successfully with this key.
+// GPT_MODEL ('gpt-5') is STILL UNVERIFIED — OPENAI_API_KEY is not configured yet
+// (left empty intentionally). This function's GPT-5 fallback path will fail
+// until that key is set; confirm the exact model string once it is.
+const GEMINI_FLASH_MODEL = 'gemini-3-flash-preview';
 const GPT_MODEL = 'gpt-5';
 
 // ── base64 helper — safe for large files (avoids call-stack blowup on big arrays) ──
@@ -60,7 +57,13 @@ function bytesToBase64(bytes) {
 
 const MIME_MAP = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
 const guessMimeType = (url) => {
-    const ext = url.split('.').pop()?.split('?')[0]?.toLowerCase() || 'pdf';
+    // Strip the query string BEFORE splitting on '.' — Supabase signed URLs embed
+    // a JWT (header.payload.signature) in the query string, and JWTs contain dots
+    // themselves. Splitting on '.' first (the original order) grabs a fragment of
+    // the token instead of the real file extension. Bug found via live smoke test
+    // (2026-07-29) on the sibling preScanDocuments function; fixed here too since
+    // this file has the identical pattern.
+    const ext = url.split('?')[0]?.split('.').pop()?.toLowerCase() || 'pdf';
     return MIME_MAP[ext] || 'application/octet-stream';
 };
 

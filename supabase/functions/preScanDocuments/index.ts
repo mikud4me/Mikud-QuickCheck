@@ -12,12 +12,9 @@ import { buildIdentityLock, computeMissingCritical, buildIdCardDetails } from ".
  * toGeminiSchema() below.
  */
 
-// ⚠️ PLACEHOLDER MODEL ID — NEEDS HUMAN VERIFICATION ONCE GEMINI_API_KEY IS LIVE.
-// Base44's "gemini_3_flash" is Base44's OWN internal alias — no public mapping
-// exists. 'gemini-2.5-flash' is a real, currently-valid Gemini API model chosen
-// as the closest known-good equivalent (fast/cheap flash tier). Confirm/replace
-// once you can test against the real Gemini API.
-const SCAN_MODEL = 'gemini-2.5-flash';
+// VERIFIED against the live Gemini API (2026-07-29): gemini-3-flash-preview
+// responds successfully with this key, on the free tier.
+const SCAN_MODEL = 'gemini-3-flash-preview';
 
 // ── base64 helper — safe for large files (avoids call-stack blowup on big arrays) ──
 function bytesToBase64(bytes) {
@@ -31,7 +28,13 @@ function bytesToBase64(bytes) {
 
 const MIME_MAP = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
 const guessMimeType = (url) => {
-    const ext = url.split('.').pop()?.split('?')[0]?.toLowerCase() || 'pdf';
+    // Strip the query string BEFORE splitting on '.' — Supabase signed URLs embed
+    // a JWT (header.payload.signature) in the query string, and JWTs contain dots
+    // themselves. Splitting on '.' first (the original order) grabs a fragment of
+    // the token instead of the real file extension. Bug found via live smoke test
+    // (2026-07-29): Gemini rejected a real upload with "Unsupported MIME type:
+    // application/octet-stream" until this was fixed.
+    const ext = url.split('?')[0]?.split('.').pop()?.toLowerCase() || 'pdf';
     return MIME_MAP[ext] || 'application/octet-stream';
 };
 
