@@ -67,7 +67,31 @@ const guessMimeType = (url) => {
     return MIME_MAP[ext] || 'application/octet-stream';
 };
 
+// ── Base64 cache, keyed by the exact string passed as "url" everywhere below ──
+// Found via live testing (2026-07-29): Supabase's gateway returns an instant,
+// empty 503 (never reaching the edge runtime at all -- no logs, x-served-by:
+// base/server) specifically when THIS function's incoming request body
+// contains a /storage/v1/object/sign/ URL pointing back at this same
+// project's own storage. Reproduced consistently (real file, fake file, valid
+// token, garbage token -- all 503; a non-"sign"-pattern URL on the exact same
+// domain succeeds fine). Every other ported function handles the identical
+// signed-URL payload with no issue, so this is specific to this one function
+// (the only one importing 'openai' -- plausibly a deliberate anti-SSRF rule
+// aimed at functions calling third-party AI APIs with a same-project signed
+// URL, not a bug to work around lightly).
+//
+// Fix: the frontend now sends a plain storage PATH (e.g. "uploads/abc.pdf"),
+// never a signed URL, in the request body. The handler downloads it ONCE via
+// the service-role client (ctx.supabaseAdmin, bypasses RLS) right after
+// parsing the request, and populates this cache keyed by that same path
+// string. fetchFileAsBase64() below checks the cache first -- since every
+// call site in this file still just passes through whatever "url" variable
+// it already has (which is now that path string), nothing else in this
+// 1500+ line file needed to change.
+const _fileCache = new Map();
+
 async function fetchFileAsBase64(url) {
+    if (_fileCache.has(url)) return _fileCache.get(url);
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch file: ${res.status}`);
     const buf = new Uint8Array(await res.arrayBuffer());
@@ -189,6 +213,25 @@ export default {
 
     if (!file_url) {
       return Response.json({ error: 'Missing file_url' }, { status: 400 });
+    }
+
+    // ── Download once via the service-role storage client, not fetch() ──
+    // file_url is now a plain storage path (e.g. "uploads/abc.pdf"), sent by
+    // the frontend instead of a signed URL -- see the _fileCache comment
+    // above fetchFileAsBase64 for why. ctx.supabaseAdmin bypasses RLS, so no
+    // signed URL is needed at all.
+    {
+      const { data: blob, error: downloadError } = await ctx.supabaseAdmin.storage
+        .from('documents')
+        .download(file_url);
+      if (downloadError || !blob) {
+        return Response.json({
+          success: false,
+          error: `Failed to download file: ${downloadError?.message || 'not found'}`
+        }, { status: 200 });
+      }
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      _fileCache.set(file_url, { mimeType: guessMimeType(file_url), data: bytesToBase64(buf) });
     }
 
     console.log(`📋 Transaction Type: ${transaction_type}`);

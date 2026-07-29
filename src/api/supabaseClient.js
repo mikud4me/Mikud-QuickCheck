@@ -32,6 +32,24 @@ export async function uploadFileToStorage(file) {
   return signedData.signedUrl;
 }
 
+// ── Extracts the plain storage path (e.g. "uploads/abc.pdf") back out of a
+// signed URL returned by uploadFileToStorage() above. ──
+// analyzeRefinanceDocument needs this instead of the signed URL itself:
+// Supabase's gateway was found (live testing, 2026-07-29) to return an
+// instant, empty 503 -- before the function even runs, no logs -- whenever
+// THAT specific function's request body contains a /storage/v1/object/sign/
+// URL pointing at this same project (every other function handles the exact
+// same signed URL fine; this one also imports the 'openai' package, so it's
+// plausibly a deliberate anti-SSRF rule rather than a bug). Sending the bare
+// path instead avoids the pattern entirely -- the function downloads it
+// directly via its own service-role storage client, no signed URL needed.
+export function getStoragePathFromSignedUrl(signedUrl) {
+  const marker = '/object/sign/documents/';
+  const idx = signedUrl.indexOf(marker);
+  if (idx === -1) return null;
+  return signedUrl.slice(idx + marker.length).split('?')[0];
+}
+
 // ── Shared error-shape helper for supabase.functions.invoke() ──
 // The old Base44 SDK behaved like axios: a rejected call carried the server's
 // JSON error body at err.response.data. supabase-js is NOT axios-shaped — invoke()

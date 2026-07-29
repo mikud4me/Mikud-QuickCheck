@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { supabase, uploadFileToStorage, parseInvokeError } from '@/api/supabaseClient';
+import { supabase, uploadFileToStorage, parseInvokeError, getStoragePathFromSignedUrl } from '@/api/supabaseClient';
 import {
   Upload, Loader2, DollarSign, 
   CheckCircle, AlertCircle, Lock, TrendingUp, X, ChevronDown, ChevronUp, Download
@@ -191,9 +191,16 @@ export default function RefinanceQuickCheck() {
     setIsAnalyzing(true);
 
     let file_url = null;
+    // analyzeRefinanceDocument needs the plain storage path, not the signed
+    // URL -- see getStoragePathFromSignedUrl's comment in supabaseClient.js.
+    // file_url itself stays the signed URL, used for the lead record/local
+    // display exactly as before. Declared here (not inside the try block)
+    // so it's also in scope for the retry attempt in the catch block below.
+    let file_path = null;
 
     try {
       file_url = await uploadFileToStorage(files[0]);
+      file_path = getStoragePathFromSignedUrl(file_url);
 
       // Build external debts array if user indicated they have extra debts
       const externalDebtsInput = hasExtraDebts
@@ -209,7 +216,7 @@ export default function RefinanceQuickCheck() {
 
       const { data, error } = await supabase.functions.invoke('analyzeRefinanceDocument', {
         body: {
-          file_url,
+          file_url: file_path,
           loan_period_years: 20,
           transaction_type: transactionType,
           external_debts_input: externalDebtsInput
@@ -251,7 +258,7 @@ export default function RefinanceQuickCheck() {
       if (file_url && isRetryable) {
         try {
           const { data: retryData, error: retryError } = await supabase.functions.invoke('analyzeRefinanceDocument', {
-            body: { file_url, loan_period_years: 20, transaction_type: transactionType }
+            body: { file_url: file_path, loan_period_years: 20, transaction_type: transactionType }
           });
           if (retryError) {
             const errBody = await parseInvokeError(retryError);
