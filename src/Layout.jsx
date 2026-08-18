@@ -8,12 +8,13 @@ import {
 import MortgageChatbot from './components/mortgage/MortgageChatbot';
 import { Toaster } from 'sonner';
 
-// STRIPPED: nav trimmed to the two surviving flows (see repo strip commit).
-// Neither is admin-only, so there's no auth/role check needed to decide
-// what's visible here -- unlike the original app, everyone sees both.
+// Nav has 3 tabs now (was 2) -- מרכז חיתום מוסדי added 2026-08-19, no
+// auth/role check needed to decide visibility since none of these pages
+// require a login, by explicit decision.
 const navItems = [
   { name: 'QuickDocCheck', label: '⚡ בדיקה מהירה', icon: FileText, highlight: true },
   { name: 'RefinanceQuickCheck', label: 'בדיקת מחזור מהירה', icon: TrendingUp },
+  { name: 'UnderwriterDashboard', label: 'מרכז חיתום מוסדי', icon: Shield },
 ];
 
 export default function Layout({ children, currentPageName }) {

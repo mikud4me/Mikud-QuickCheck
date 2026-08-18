@@ -58,3 +58,41 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/chatWithMiko/deno.json"
 entrypoint = "./functions/chatWithMiko/index.ts"
+
+# ── מרכז חיתום מוסדי — no auth, see each function's own comment ──
+
+[functions.lockEmployerFromPayslips]
+enabled = true
+verify_jwt = false
+import_map = "./functions/lockEmployerFromPayslips/deno.json"
+entrypoint = "./functions/lockEmployerFromPayslips/index.ts"
+
+[functions.buildUnderwriterReport]
+enabled = true
+verify_jwt = false
+import_map = "./functions/buildUnderwriterReport/deno.json"
+entrypoint = "./functions/buildUnderwriterReport/index.ts"
+
+[functions.processUnderwriterCase]
+enabled = true
+verify_jwt = false
+import_map = "./functions/processUnderwriterCase/deno.json"
+entrypoint = "./functions/processUnderwriterCase/index.ts"
+
+[functions.generateExecutiveSummaryHelper]
+enabled = true
+verify_jwt = false
+import_map = "./functions/generateExecutiveSummaryHelper/deno.json"
+entrypoint = "./functions/generateExecutiveSummaryHelper/index.ts"
+
+[functions.whatIfNarrative]
+enabled = true
+verify_jwt = false
+import_map = "./functions/whatIfNarrative/deno.json"
+entrypoint = "./functions/whatIfNarrative/index.ts"
+
+[functions.sweepStuckUnderwriterCases]
+enabled = true
+verify_jwt = false
+import_map = "./functions/sweepStuckUnderwriterCases/deno.json"
+entrypoint = "./functions/sweepStuckUnderwriterCases/index.ts"

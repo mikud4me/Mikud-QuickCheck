@@ -24,7 +24,12 @@ import { withSupabase } from "@supabase/server";
  */
 
 export default {
-  fetch: withSupabase({ auth: ["publishable"] }, async (req, ctx) => {
+  // "secret" added (2026-08-19) alongside "publishable" so processUnderwriterCase
+  // (מרכז חיתום מוסדי) can call this function server-to-server via
+  // ctx.supabaseAdmin.functions.invoke(...), which authenticates as "secret"
+  // mode — "publishable" alone doesn't cover that caller. Purely additive:
+  // widens who's accepted, doesn't narrow the existing QuickDocCheck access.
+  fetch: withSupabase({ auth: ["publishable", "secret"] }, async (req, ctx) => {
     try {
         const payload = await req.json();
         const { rawData, reportType, dealContext } = payload;
