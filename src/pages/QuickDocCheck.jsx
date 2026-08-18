@@ -15,6 +15,7 @@ import ErrorMessage from '@/components/quickcheck/ErrorMessage';
 import { minifyPartialResults } from '@/components/lib/minifyExtractedData';
 import { expandLargePdfs } from '@/components/lib/pdfPageSplitter';
 import { mergeExtractedDocuments } from '../../shared/mergeExtractedDocuments.js';
+import { reconcileIdentityFromPreScan } from '../../shared/reconcileIdentityFromPreScan.js';
 
 export default function QuickDocCheck() {
   const navigate = useNavigate();
@@ -34,6 +35,9 @@ export default function QuickDocCheck() {
   const [intakeQuestions, setIntakeQuestions] = useState(null);
   const [intakeDiagnosis, setIntakeDiagnosis] = useState(null);
   const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
+  // 'quick' | 'full' — which result tab is showing. Only relevant once at least one
+  // of preScanResult/result exists; see the tab bar in the render below.
+  const [activeResultTab, setActiveResultTab] = useState('quick');
   // useRef כדי שהנתונים יהיו זמינים מיד בסבב השני (setState הוא async)
   const cachedExtractedDataRef = useRef(null);
 
@@ -51,8 +55,15 @@ export default function QuickDocCheck() {
     setProposedMortgagePayment('');
     setIntakeQuestions(null);
     setIntakeDiagnosis(null);
+    setActiveResultTab('quick');
     cachedExtractedDataRef.current = null;
   }, []);
+
+  // The full report is the more actionable view, so once it's ready switch to it
+  // automatically — but preScanResult stays available on its own tab, not discarded.
+  useEffect(() => {
+    if (result) setActiveResultTab('full');
+  }, [result]);
 
   // דחיסת תמונות לפני העלאה — 2000px מקסימום, 80% quality
   const compressImage = (file) => {
@@ -397,7 +408,14 @@ export default function QuickDocCheck() {
         e.errorCode = 'NO_EXTRACTED_DATA';
         throw e;
       }
-      const rawData = extractedData;
+      // ── IDENTITY RECONCILIATION FROM PRE-SCAN ──
+      // preScanDocuments sees all files together in one call with an identity-only schema, and
+      // is measurably better at correctly identifying both borrowers than extractSingleChunk's
+      // per-file calls (larger schema, no cross-file context). If the user ran סרוק מה יש בתיק
+      // first, use its findings to fill gaps in the extraction's own borrowers array — never
+      // overwrites data extraction already has, only fills empty fields or adds a borrower
+      // extraction missed entirely. See shared/reconcileIdentityFromPreScan.js.
+      const rawData = reconcileIdentityFromPreScan(extractedData, preScanResult);
       const cleanedRawData = {
         borrowers: Array.isArray(rawData.borrowers) ? rawData.borrowers : [],
         payslips_borrower1: rawData.payslips_borrower1,
@@ -621,6 +639,7 @@ export default function QuickDocCheck() {
     setManualPropertyValue('');
     setProposedMortgagePayment('');
     setIntakeQuestions(null);
+    setActiveResultTab('quick');
     cachedExtractedDataRef.current = null;
   };
 
@@ -856,8 +875,39 @@ export default function QuickDocCheck() {
           </div>
         </div>
 
-        {/* Pre-Scan Result Card */}
-        {preScanResult && !result && !intakeQuestions && (
+        {/* Tab bar — only once both a quick scan AND a full report exist; switches between them
+            without discarding either. Before that point there's only one thing to show, so no
+            tabs are rendered (avoids a pointless single-tab UI). */}
+        {preScanResult && result && result.borrower_info && !intakeQuestions && (
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => setActiveResultTab('quick')}
+              className={`flex-1 py-3 px-4 rounded-xl text-sm font-bold transition-all border-2 flex items-center justify-center gap-2 ${
+                activeResultTab === 'quick'
+                  ? 'bg-slate-700 border-amber-400 text-white'
+                  : 'bg-slate-800/40 border-slate-700 text-slate-400 hover:border-slate-600'
+              }`}
+            >
+              <ScanSearch className="w-4 h-4" />
+              סריקה מהירה
+            </button>
+            <button
+              onClick={() => setActiveResultTab('full')}
+              className={`flex-1 py-3 px-4 rounded-xl text-sm font-bold transition-all border-2 flex items-center justify-center gap-2 ${
+                activeResultTab === 'full'
+                  ? 'bg-slate-700 border-amber-400 text-white'
+                  : 'bg-slate-800/40 border-slate-700 text-slate-400 hover:border-slate-600'
+              }`}
+            >
+              <Zap className="w-4 h-4" />
+              דוח מלא
+            </button>
+          </div>
+        )}
+
+        {/* Pre-Scan Result Card — shown on its own before a full report exists, or as the
+            "סריקה מהירה" tab once both exist (kept, not discarded, once the full report runs). */}
+        {preScanResult && !intakeQuestions && (!result || activeResultTab === 'quick') && (
           <PreScanResult
             scanResult={preScanResult}
             onSuggestType={(type) => setReportType(type)}
@@ -918,8 +968,10 @@ export default function QuickDocCheck() {
           </div>
         )}
 
-        {/* Results — Early Return מוחלט: רק אם יש result עם borrower_info, אחרת לא לרנדר ולקרוס */}
-        {result && result.borrower_info && (
+        {/* Results — Early Return מוחלט: רק אם יש result עם borrower_info, אחרת לא לרנדר ולקרוס.
+            Hidden while the "סריקה מהירה" tab is active (only relevant when a pre-scan result
+            also exists — otherwise there's no tab to switch away to). */}
+        {result && result.borrower_info && (!preScanResult || activeResultTab === 'full') && (
           <>
             {result._missingCritical?.length > 0 && (
               <div className="mb-4 bg-red-950/60 border-2 border-red-500/60 rounded-2xl p-5">
