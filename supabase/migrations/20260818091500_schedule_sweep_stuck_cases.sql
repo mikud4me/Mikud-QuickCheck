@@ -9,7 +9,7 @@
 -- Vault first:
 --
 --   select vault.create_secret('<this-project-service-role-key>', 'service_role_key');
---   select vault.create_secret('https://mandtjqtjkhbjhxhbjvx.supabase.co', 'project_url');
+--   select vault.create_secret('https://megadcnmlgutwjgveced.supabase.co', 'project_url');
 --
 -- (run once via the SQL editor or `supabase db execute`, not committed to
 -- git) — this migration then references both by name via

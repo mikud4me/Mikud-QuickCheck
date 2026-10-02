@@ -31,3 +31,4 @@ dist-ssr
 base44/.app.jsonc
 supabase/.temp/
 .vercel
+.env*
